@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,9 @@ class FakeYDL:
         if FakeYDL.error:
             raise FakeYDL.error
         if download:
+            for hook in self.opts.get("progress_hooks", []):
+                hook({"status": "downloading", "downloaded_bytes": 5, "total_bytes": 10})
+                hook({"status": "finished"})
             out = Path(self.opts["outtmpl"].replace("%(ext)s", "mp4"))
             out.write_bytes(b"fake-video-bytes")
         return {"title": "My: Clip/1", "thumbnail": "https://img/x.jpg", "duration": 12}
@@ -80,15 +85,85 @@ def test_info_private_video_message():
     assert "private" in res.json()["detail"]
 
 
-def test_download_streams_file_and_cleans_up(tmp_path, monkeypatch):
-    monkeypatch.setattr(server.tempfile, "mkdtemp", lambda prefix: str(tmp_path / "work"))
-    (tmp_path / "work").mkdir()
-    res = client.get("/api/download", params={"url": "https://youtu.be/abc"})
+class SyncExecutor:
+    def submit(self, fn, *args):
+        fn(*args)
+
+
+@pytest.fixture
+def sync_jobs(monkeypatch):
+    monkeypatch.setattr(server, "executor", SyncExecutor())
+    server.jobs.clear()
+
+
+def test_job_downloads_file_then_cleans_up(sync_jobs):
+    res = client.post("/api/jobs", json={"url": "https://youtu.be/abc"})
     assert res.status_code == 200
-    assert res.content == b"fake-video-bytes"
-    assert res.headers["content-type"] == "video/mp4"
-    assert "My%20Clip1.mp4" in res.headers["content-disposition"]
-    assert not (tmp_path / "work").exists()
+    job_id = res.json()["id"]
+    workdir = server.jobs[job_id].workdir
+
+    status = client.get(f"/api/jobs/{job_id}").json()
+    assert status["status"] == "ready"
+    assert status["progress"] == 1.0
+
+    file = client.get(f"/api/jobs/{job_id}/file")
+    assert file.status_code == 200
+    assert file.content == b"fake-video-bytes"
+    assert file.headers["content-type"] == "video/mp4"
+    assert "My%20Clip1.mp4" in file.headers["content-disposition"]
+
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 204
+    assert not workdir.exists()
+    assert client.get(f"/api/jobs/{job_id}").status_code == 404
+
+
+def test_job_reports_friendly_error(sync_jobs):
+    FakeYDL.error = yt_dlp.utils.DownloadError("Sign in to confirm your age")
+    job_id = client.post("/api/jobs", json={"url": "https://youtu.be/abc"}).json()["id"]
+    status = client.get(f"/api/jobs/{job_id}").json()
+    assert status["status"] == "error"
+    assert "private or requires login" in status["error"]
+    assert client.get(f"/api/jobs/{job_id}/file").status_code == 409
+
+
+def test_job_rejects_unsupported_url(sync_jobs):
+    assert client.post("/api/jobs", json={"url": "https://example.com/v"}).status_code == 400
+
+
+def test_cancel_stops_running_download(monkeypatch):
+    server.jobs.clear()
+    started, release = threading.Event(), threading.Event()
+
+    class SlowYDL(FakeYDL):
+        def extract_info(self, url, download=False):
+            started.set()
+            release.wait(5)
+            for hook in self.opts["progress_hooks"]:
+                hook({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 10})
+            raise AssertionError("progress hook should have cancelled the download")
+
+    monkeypatch.setattr(server.yt_dlp, "YoutubeDL", SlowYDL)
+    job_id = client.post("/api/jobs", json={"url": "https://youtu.be/abc"}).json()["id"]
+    job = server.jobs[job_id]
+    assert started.wait(5)
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 204
+    release.set()
+    for _ in range(50):
+        if not job.workdir.exists():
+            break
+        time.sleep(0.05)
+    assert job.cancelled
+    assert job.status != "error"
+    assert not job.workdir.exists()
+
+
+def test_expired_jobs_are_removed(sync_jobs, monkeypatch):
+    job_id = client.post("/api/jobs", json={"url": "https://youtu.be/abc"}).json()["id"]
+    workdir = server.jobs[job_id].workdir
+    monkeypatch.setattr(server, "JOB_TTL_SECONDS", -1)
+    server.sweep_expired_jobs()
+    assert job_id not in server.jobs
+    assert not workdir.exists()
 
 
 def test_api_key_required_when_configured(monkeypatch):
