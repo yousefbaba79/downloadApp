@@ -12,4 +12,5 @@ COPY app.py .
 COPY static ./static
 
 EXPOSE 8000
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Hosts like Render tell the app which port to use via $PORT; default to 8000 elsewhere.
+CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

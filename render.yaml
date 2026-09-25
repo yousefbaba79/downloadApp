@@ -1,0 +1,19 @@
+# Render Blueprint: deploys the downloader website from server/Dockerfile.
+# In Render: New → Blueprint → pick this repository. See README ("Deploy on Render").
+services:
+  - type: web
+    name: video-downloader
+    runtime: docker
+    plan: free
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    healthCheckPath: /health
+    envVars:
+      # Access code visitors enter once. Render asks you for it when you create the Blueprint.
+      - key: API_KEY
+        sync: false
+      # The free plan has 512 MB of memory, so keep downloads small and few at a time.
+      - key: MAX_FILESIZE_MB
+        value: "300"
+      - key: MAX_PARALLEL_DOWNLOADS
+        value: "2"

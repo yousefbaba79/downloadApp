@@ -32,7 +32,33 @@ YouTube's separate video and audio streams. The Docker setup below already inclu
 
 Run the tests with `pip install -r requirements-dev.txt && pytest`.
 
-## Put it online with Cloudflare Tunnel
+## Deploy on Render (free)
+
+Render builds the site from `server/Dockerfile` using the settings in `render.yaml`, and gives
+it a free `https://….onrender.com` address.
+
+1. Sign up at [render.com](https://render.com) with your GitHub account.
+2. Click **New → Blueprint**, then connect the `downloadApp` repository. If Render asks which
+   repositories it may access, allow this one.
+3. Pick the branch that has the code, if asked. Render reads `render.yaml` and shows one web
+   service called **video-downloader** on the **Free** plan.
+4. It asks for a value for **`API_KEY`**. Type an access code you'll share with the people
+   allowed to use the site, for example `family2026`.
+5. Click **Apply** (or **Deploy Blueprint**). The first build takes a few minutes.
+6. When it says **Live**, open the `https://video-downloader-….onrender.com` address shown at the
+   top of the service page. Enter your access code the first time.
+
+Every push to the branch redeploys automatically.
+
+**Free plan limits:**
+- After about 15 minutes with no visitors the site goes to sleep. The next visit takes about a
+  minute to load while it wakes up.
+- It has 512 MB of memory, so `render.yaml` limits videos to 300 MB and 2 downloads at a time.
+  You can change `MAX_FILESIZE_MB` and `MAX_PARALLEL_DOWNLOADS` under **Environment** in Render.
+- If YouTube downloads fail with "Could not get the video", YouTube is probably blocking
+  Render's servers. Instagram and Facebook usually still work.
+
+## Put it online with Cloudflare Tunnel (runs on your own computer)
 
 Cloudflare Tunnel gives the server on your computer a public **HTTPS** address. You don't need
 to open ports on your router. You need [Docker](https://docs.docker.com/get-docker/), and the
