@@ -1,28 +1,24 @@
-# Video Downloader (Android + iOS)
+# Video Downloader (web app)
 
-A mobile app that downloads videos from **YouTube, Instagram and Facebook**. The user pastes a
-link, taps **Download**, and the video is saved to the phone's gallery.
+A website that downloads videos from **YouTube, Instagram and Facebook**. You paste a link, tap
+**Download**, and the video is saved to your device. It works in any browser on Android, iPhone
+or a computer. No app store is needed.
 
 ```
-┌──────────────┐  1. POST /api/info {url}        ┌────────────────────────┐
-│  Mobile app  │ ──────────────────────────────▶ │  Server (FastAPI)      │
-│  (Expo /     │  2. GET /api/download?url=…     │  yt-dlp finds the real │
-│ React Native)│ ◀────────── video.mp4 ───────── │  video file & streams  │
-└──────┬───────┘                                 └────────────────────────┘
-       │ 3. save to Photos / Gallery
+┌──────────────┐   1. POST /api/jobs {url}          ┌───────────────────────────┐
+│   Browser    │ ─────────────────────────────────▶ │  Server (FastAPI)         │
+│  (phone or   │   2. GET /api/jobs/{id}  (poll)    │  yt-dlp downloads the     │
+│   computer)  │   3. GET /api/jobs/{id}/file       │  video in the background  │
+└──────────────┘ ◀──────────── video.mp4 ────────── └───────────────────────────┘
 ```
 
-Finding the real video file behind a YouTube, Instagram or Facebook link is hard, and the sites
-change often. The server uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) for this. You can
-update it on the server at any time, so you don't need to ship a new app version when a site
-changes.
+The server does the hard part. It uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) to find the
+real video file behind a link. The same server also hosts the web page (`server/static/`).
+Downloads run in the background while the page shows progress, so no single request takes more
+than a few seconds. That matters behind Cloudflare, which cuts off slow requests after about
+100 seconds.
 
-| Folder    | What it is |
-|-----------|------------|
-| `mobile/` | Expo (React Native + TypeScript) app for Android and iOS from one codebase |
-| `server/` | Python FastAPI backend using yt-dlp |
-
-## 1. Run the server
+## Run it on your computer
 
 ```bash
 cd server
@@ -31,57 +27,75 @@ pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Or use Docker. This includes ffmpeg, which yt-dlp needs to merge YouTube's separate video and
-audio streams into higher-quality MP4s:
-
-```bash
-docker build -t video-downloader-server server
-docker run -p 8000:8000 video-downloader-server
-```
-
-Optional environment variables:
-
-- `API_KEY`: when set, the app must send the same key in the `X-API-Key` header.
-- `MAX_FILESIZE_MB`: the largest video the server will download. Default is `500`.
+Open http://localhost:8000. For best quality, install **ffmpeg**, which yt-dlp needs to combine
+YouTube's separate video and audio streams. The Docker setup below already includes it.
 
 Run the tests with `pip install -r requirements-dev.txt && pytest`.
 
-## 2. Run the app
+## Put it online with Cloudflare Tunnel
+
+Cloudflare Tunnel gives the server on your computer a public **HTTPS** address. You don't need
+to open ports on your router. You need [Docker](https://docs.docker.com/get-docker/), and the
+computer must stay on while people use the site.
 
 ```bash
-cd mobile
-npm install
-cp .env.example .env   # set EXPO_PUBLIC_API_URL to your server
-npx expo start
+cp .env.example .env      # optional: set API_KEY to make the site private
 ```
 
-- On a real phone, `localhost` means the phone itself. Set `EXPO_PUBLIC_API_URL` to your
-  computer's LAN IP address (for example `http://192.168.1.20:8000`) or to a deployed HTTPS URL.
-- Saving to the gallery uses `expo-media-library`. It works best in a development build
-  (`npx expo run:android` / `npx expo run:ios`, or `npx eas-cli build --profile development`)
-  rather than Expo Go.
-- Production builds: `npx eas-cli build -p android` and `npx eas-cli build -p ios`.
-- For production, host the server behind **HTTPS**. iOS and Android block plain `http://` by
-  default in release builds.
+### Option A: quick test, no account needed
 
-## How the app works
+```bash
+docker compose --profile quick up -d --build
+docker compose logs tunnel-quick | grep trycloudflare.com
+```
 
-1. The user pastes a link. The app detects which platform it is from.
-2. **Download** → the app calls `/api/info` and shows the title and thumbnail.
-3. The app downloads the MP4 from `/api/download` and shows a progress bar. The user can cancel.
-4. The app saves the video to Photos/Gallery. If the user denies permission, the share sheet
-   opens instead, so they can still save it (for example with "Save to Files").
-5. Private or login-only videos, and links from other sites, show a clear error message.
+Open the `https://….trycloudflare.com` address it prints, on your phone or anywhere else. The
+address **changes every time** the tunnel restarts, so use this only for testing.
 
-## Important: legal and app store rules
+### Option B: your own domain, permanent address
 
-- **YouTube's Terms of Service forbid downloading videos** except through YouTube's own features.
-  Instagram and Facebook have similar terms. Users should only download videos they own or have
-  permission to save. The app shows a notice saying this.
-- **Google Play and the Apple App Store usually reject apps that download YouTube videos.** Many
-  Instagram and Facebook downloaders are rejected too. Common alternatives:
-  - Android: distribute the APK yourself, or through F-Droid or another store.
-  - Remove YouTube support (from `ALLOWED_HOSTS` in `server/app.py` and `PLATFORM_HOSTS` in
-    `mobile/src/api.ts`) before submitting to a store.
-- Sites like YouTube often block or rate-limit requests from cloud server IPs. If that happens
-  in production, see yt-dlp's documentation on cookies and PO tokens.
+This needs a free Cloudflare account and a domain that uses Cloudflare for DNS.
+
+1. In the Cloudflare dashboard, go to **Zero Trust → Networks → Tunnels → Create a tunnel**
+   and choose **Cloudflared**. The menu names may be slightly different.
+2. Copy the **token** it shows into `.env` as `TUNNEL_TOKEN=…`.
+3. Add a **Public Hostname**, for example `video.yourdomain.com`, with service **HTTP** and
+   URL `server:8000`.
+4. Start it:
+
+   ```bash
+   docker compose --profile named up -d --build
+   ```
+
+Your site is now at `https://video.yourdomain.com`.
+
+## Settings (`.env`)
+
+| Setting | What it does |
+|---------|--------------|
+| `API_KEY` | An access code. When set, visitors must enter it once. The browser remembers it. Leave it empty for an open site. |
+| `MAX_FILESIZE_MB` | The largest video the server will download. Default `500`. |
+| `TUNNEL_TOKEN` | Cloudflare Tunnel token, used only by Option B. |
+
+If other people can find the link, **set `API_KEY`**. Otherwise anyone can use your server and
+your internet connection to download videos.
+
+## Saving on phones
+
+- **Android:** the video goes to **Downloads** and usually shows up in the Gallery.
+- **iPhone:** Safari saves it to the **Files** app → Downloads. Open it and tap
+  **Share → Save Video** to move it to Photos. The site shows this tip on iPhones.
+- **App icon:** you can add the site to your home screen (Share → Add to Home Screen) so it opens
+  like an app.
+
+## Important
+
+- **Downloading breaks the terms of service** of YouTube, and likely Instagram and Facebook too.
+  Only download videos you own or have permission to save. The page shows this notice.
+- A **public** downloader site is more likely to get complaints from rights holders than a
+  private one. Keep it private with `API_KEY`, or drop YouTube from `ALLOWED_HOSTS` in
+  `server/app.py` (and `PLATFORMS` in `server/static/index.html`).
+- Cloudflare's terms limit using its free network mainly to serve large amounts of video. That's
+  fine for personal use. Check their terms before you grow it.
+- Sites change often. If downloads start failing, update yt-dlp: rebuild with
+  `docker compose build --pull --no-cache server`.

@@ -1,11 +1,11 @@
 """Backend for the video downloader app.
 
-The mobile app sends a video page URL (YouTube, Instagram or Facebook). This server uses
-yt-dlp to resolve and download the actual video file, then hands it to the phone.
+The web page sends a video page URL (YouTube, Instagram or Facebook). This server uses
+yt-dlp to resolve and download the actual video file, then hands it to the browser.
 Doing the extraction on a server keeps the app simple and lets you update yt-dlp (which
-changes often as the sites change) without shipping a new app release.
+changes often as the sites change) without changing the web page.
 
-Downloads run as background jobs: the app starts a job, polls its progress, then fetches
+Downloads run as background jobs: the page starts a job, polls its progress, then fetches
 the finished file. Every request returns quickly, which matters behind proxies such as
 Cloudflare that cut off requests that take longer than ~100 seconds to respond.
 """
@@ -24,8 +24,9 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import yt_dlp
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ALLOWED_HOSTS = {
@@ -37,11 +38,13 @@ ALLOWED_HOSTS = {
     "fb.com": "facebook",
 }
 
-# Set API_KEY in the environment to require the app to send a matching X-API-Key header.
+# Set API_KEY in the environment to make the site private: visitors must enter this access
+# code once (it is sent as the X-API-Key header, or ?key= for file downloads).
 API_KEY = os.environ.get("API_KEY")
 MAX_FILESIZE_MB = int(os.environ.get("MAX_FILESIZE_MB", "500"))
 MAX_PARALLEL_DOWNLOADS = int(os.environ.get("MAX_PARALLEL_DOWNLOADS", "3"))
-# Finished files are deleted after this long if the app never fetched/deleted them.
+# Finished files are deleted after this long. The browser saves the file itself, so the
+# server can't tell when it's done; keep this long enough for slow connections.
 JOB_TTL_SECONDS = int(os.environ.get("JOB_TTL_MINUTES", "30")) * 60
 
 app = FastAPI(title="Video Downloader API")
@@ -98,9 +101,16 @@ jobs_lock = threading.Lock()
 executor = ThreadPoolExecutor(max_workers=MAX_PARALLEL_DOWNLOADS)
 
 
-def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-    if API_KEY and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def require_api_key(
+    x_api_key: str | None = Header(default=None),
+    key: str | None = Query(default=None, include_in_schema=False),
+) -> None:
+    # Browsers can't add headers to a plain file download link, so ?key= is accepted too.
+    if API_KEY and API_KEY not in (x_api_key, key):
+        raise HTTPException(status_code=401, detail="Access code required.")
 
 
 def detect_platform(url: str) -> str:
@@ -197,7 +207,7 @@ def run_job(job: Job) -> None:
         job.status = "ready"
     except Cancelled:
         shutil.rmtree(job.workdir, ignore_errors=True)
-    except Exception as err:  # noqa: BLE001 - any failure is reported to the app
+    except Exception as err:  # noqa: BLE001 - any failure is reported to the page
         exc_info = getattr(err, "exc_info", None) or (None, None)
         cancelled = job.cancelled or isinstance(exc_info[1], Cancelled)
         if not cancelled:
@@ -269,5 +279,9 @@ def job_file(job_id: str) -> FileResponse:
 
 @app.delete("/api/jobs/{job_id}", status_code=204, dependencies=[Depends(require_api_key)])
 def delete_job(job_id: str) -> None:
-    """Cancel a running download or free the finished file once the app has saved it."""
+    """Cancel a running download or free its file early."""
     remove_job(job_id)
+
+
+# Serve the web page. Mounted last so the /api routes above take priority.
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

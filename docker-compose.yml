@@ -1,0 +1,34 @@
+# Runs the downloader website plus a Cloudflare Tunnel that gives it a public HTTPS address.
+#
+#   Quick test (no Cloudflare account, random *.trycloudflare.com address):
+#     docker compose --profile quick up -d
+#     docker compose logs tunnel-quick | grep trycloudflare.com
+#
+#   Your own domain (needs a Cloudflare account + TUNNEL_TOKEN in .env, see README):
+#     docker compose --profile named up -d
+
+services:
+  server:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      API_KEY: ${API_KEY:-}
+      MAX_FILESIZE_MB: ${MAX_FILESIZE_MB:-500}
+    ports:
+      - "8000:8000"  # also reachable at http://localhost:8000 on this computer
+
+  tunnel-quick:
+    image: cloudflare/cloudflared:latest
+    profiles: ["quick"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://server:8000
+    depends_on: [server]
+
+  tunnel-named:
+    image: cloudflare/cloudflared:latest
+    profiles: ["named"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on: [server]

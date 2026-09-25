@@ -172,3 +172,15 @@ def test_api_key_required_when_configured(monkeypatch):
     assert client.post("/api/info", json={"url": url}).status_code == 401
     ok = client.post("/api/info", json={"url": url}, headers={"X-API-Key": "secret"})
     assert ok.status_code == 200
+
+
+def test_serves_web_page():
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "Video Downloader" in res.text
+
+
+def test_api_key_accepted_as_query_param(monkeypatch):
+    monkeypatch.setattr(server, "API_KEY", "secret")
+    assert client.get("/api/jobs/missing").status_code == 401
+    assert client.get("/api/jobs/missing", params={"key": "secret"}).status_code == 404

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Video Downloader</title>
+  <meta name="description" content="Download videos from YouTube, Instagram and Facebook.">
+  <meta name="theme-color" content="#2563eb">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Downloader">
+  <style>
+    :root {
+      --bg: #f5f6f8; --card: #ffffff; --text: #111827; --muted: #6b7280; --border: #d1d5db;
+      --accent: #2563eb; --accent-text: #ffffff; --track: #e5e7eb;
+      --ok: #15803d; --err: #b91c1c; --err-bg: #fef2f2;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1115; --card: #1a1d23; --text: #f3f4f6; --muted: #9ca3af; --border: #374151;
+        --accent: #3b82f6; --track: #2a2e36; --ok: #4ade80; --err: #f87171; --err-bg: #2a1515;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column;
+    }
+    main { width: 100%; max-width: 560px; margin: 0 auto; padding: 48px 16px 24px; flex: 1; }
+    h1 { font-size: 28px; margin: 0; }
+    .subtitle { color: var(--muted); margin: 4px 0 28px; }
+    .field { display: flex; gap: 8px; }
+    input {
+      flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--card);
+      border: 1px solid var(--border); border-radius: 12px; padding: 14px;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+    button {
+      font: inherit; font-weight: 600; border: 0; border-radius: 12px; cursor: pointer;
+      padding: 14px 18px; background: var(--card); color: var(--text); border: 1px solid var(--border);
+    }
+    button.primary { width: 100%; margin-top: 16px; padding: 16px; font-size: 17px;
+      background: var(--accent); color: var(--accent-text); border: 0; }
+    button.secondary { background: var(--muted); color: #fff; border: 0; }
+    button:disabled { opacity: .6; cursor: default; }
+    .hint { color: var(--accent); font-size: 14px; min-height: 21px; margin-top: 6px; }
+    .card { margin-top: 24px; background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; overflow: hidden; }
+    .card img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--track); }
+    .card .meta { padding: 12px; }
+    .card .title { font-weight: 600; overflow-wrap: anywhere; }
+    .card .by { color: var(--muted); font-size: 14px; }
+    .status { margin-top: 20px; }
+    .status-text { display: flex; align-items: center; gap: 10px; }
+    .bar { height: 8px; background: var(--track); border-radius: 4px; margin-top: 10px; overflow: hidden; }
+    .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+    .bar.indeterminate > div { width: 35%; animation: slide 1.2s ease-in-out infinite; }
+    @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+    .spinner { width: 18px; height: 18px; border: 3px solid var(--track); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .ok { color: var(--ok); font-weight: 600; }
+    .error { color: var(--err); background: var(--err-bg); padding: 12px; border-radius: 12px; }
+    .done-box a { color: var(--accent); font-weight: 600; }
+    .tip { color: var(--muted); font-size: 14px; margin-top: 8px; }
+    footer { text-align: center; color: var(--muted); font-size: 12px; padding: 16px; }
+    [hidden] { display: none !important; }
+    @media (prefers-reduced-motion: reduce) {
+      .bar.indeterminate > div, .spinner { animation-duration: 3s; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Video Downloader</h1>
+    <p class="subtitle">YouTube · Instagram · Facebook</p>
+
+    <form id="form" novalidate>
+      <label for="url" hidden>Video link</label>
+      <div class="field">
+        <input id="url" type="url" inputmode="url" placeholder="Paste video link here"
+               autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button id="paste" type="button" hidden>Paste</button>
+      </div>
+      <div id="hint" class="hint" aria-live="polite"></div>
+      <button id="download" class="primary" type="submit">Download</button>
+      <button id="cancel" class="primary secondary" type="button" hidden>Cancel</button>
+    </form>
+
+    <div id="card" class="card" hidden>
+      <img id="thumb" alt="" hidden>
+      <div class="meta">
+        <div id="title" class="title"></div>
+        <div id="by" class="by"></div>
+      </div>
+    </div>
+
+    <div id="status" class="status" aria-live="polite"></div>
+  </main>
+  <footer>Only download videos you own or have permission to save.</footer>
+
+  <script>
+    const PLATFORMS = {
+      'youtube.com': 'YouTube', 'youtu.be': 'YouTube',
+      'instagram.com': 'Instagram',
+      'facebook.com': 'Facebook', 'fb.watch': 'Facebook', 'fb.com': 'Facebook',
+    };
+    const KEY_STORAGE = 'accessCode';
+    const $ = (id) => document.getElementById(id);
+    const els = {
+      form: $('form'), url: $('url'), paste: $('paste'), hint: $('hint'), download: $('download'),
+      cancel: $('cancel'), card: $('card'), thumb: $('thumb'), title: $('title'), by: $('by'),
+      status: $('status'),
+    };
+    let current = null; // { jobId, cancelled }
+
+    function detectPlatform(value) {
+      let host;
+      try {
+        const u = new URL(value.trim());
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+        host = u.hostname.toLowerCase();
+      } catch { return null; }
+      for (const [domain, name] of Object.entries(PLATFORMS)) {
+        if (host === domain || host.endsWith('.' + domain)) return name;
+      }
+      return null;
+    }
+
+    function getKey() {
+      try { return localStorage.getItem(KEY_STORAGE) || ''; } catch { return ''; }
+    }
+    function setKey(value) {
+      try { localStorage.setItem(KEY_STORAGE, value); } catch { /* private mode */ }
+    }
+
+    async function api(path, options = {}, retried = false) {
+      const headers = { ...(options.headers || {}) };
+      const key = getKey();
+      if (key) headers['X-API-Key'] = key;
+      let res;
+      try {
+        res = await fetch(path, { ...options, headers });
+      } catch {
+        throw new Error("Can't reach the server. Check your internet connection and try again.");
+      }
+      if (res.status === 401 && !retried) {
+        const code = prompt('This site is private. Enter the access code:');
+        if (code) { setKey(code.trim()); return api(path, options, true); }
+      }
+      if (!res.ok) {
+        let message = `Server error (${res.status}). Please try again.`;
+        try { const body = await res.json(); if (typeof body.detail === 'string') message = body.detail; } catch {}
+        throw new Error(message);
+      }
+      return res.status === 204 ? null : res.json();
+    }
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    function setBusy(busy) {
+      els.download.hidden = busy;
+      els.cancel.hidden = !busy;
+      els.url.disabled = busy;
+      els.paste.disabled = busy;
+    }
+
+    function showProgress(label, fraction) {
+      const pct = fraction == null ? null : Math.round(fraction * 100);
+      els.status.innerHTML = `
+        <div class="status-text"><span class="spinner"></span><span></span></div>
+        <div class="bar${pct == null ? ' indeterminate' : ''}"><div></div></div>`;
+      els.status.querySelector('.status-text span:last-child').textContent =
+        pct == null ? label : `${label} ${pct}%`;
+      if (pct != null) els.status.querySelector('.bar > div').style.width = pct + '%';
+    }
+
+    function showError(message) {
+      els.status.innerHTML = '<div class="error"></div>';
+      els.status.firstChild.textContent = message;
+    }
+
+    function showCard(info) {
+      els.card.hidden = false;
+      els.title.textContent = info.title || 'Video';
+      els.by.textContent = info.uploader || '';
+      if (info.thumbnail) {
+        els.thumb.src = info.thumbnail;
+        els.thumb.hidden = false;
+      } else {
+        els.thumb.hidden = true;
+      }
+    }
+
+    function fileUrl(jobId) {
+      const key = getKey();
+      return `/api/jobs/${jobId}/file` + (key ? `?key=${encodeURIComponent(key)}` : '');
+    }
+
+    function showDone(jobId) {
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      els.status.innerHTML = `
+        <div class="done-box">
+          <div class="ok">✓ Your video is downloading.</div>
+          <div class="tip">Didn't start? <a download>Tap here to download it</a>.</div>
+          <div class="tip">${isIOS
+            ? 'On iPhone: open the Files app → Downloads, open the video, tap Share → Save Video to add it to Photos.'
+            : 'The video is saved in your Downloads folder.'}</div>
+        </div>`;
+      els.status.querySelector('a').href = fileUrl(jobId);
+    }
+
+    async function startDownload(url) {
+      const run = { jobId: null, cancelled: false };
+      current = run;
+      setBusy(true);
+      els.card.hidden = true;
+      showProgress('Finding video…', null);
+
+      // The preview is optional: show it when it arrives, but don't wait for it.
+      api('/api/info', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+      }).then((info) => { if (current === run) showCard(info); }).catch(() => {});
+
+      try {
+        const job = await api('/api/jobs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+        });
+        run.jobId = job.id;
+
+        let status = job;
+        while (!run.cancelled && status.status !== 'ready' && status.status !== 'error') {
+          if (status.status === 'downloading') showProgress('Preparing video…', status.progress);
+          else if (status.status === 'processing') showProgress('Almost done…', null);
+          await sleep(1000);
+          if (run.cancelled) break;
+          status = await api(`/api/jobs/${job.id}`);
+        }
+        if (run.cancelled) return;
+        if (status.status === 'error') throw new Error(status.error || 'Download failed. Please try again.');
+
+        if (status.title && els.card.hidden) showCard({ title: status.title });
+        // The server sends the file as an attachment, so this downloads without leaving the page.
+        window.location.href = fileUrl(job.id);
+        showDone(job.id);
+      } catch (err) {
+        if (!run.cancelled) showError(err.message || String(err));
+      } finally {
+        if (current === run) { current = null; setBusy(false); }
+      }
+    }
+
+    els.url.addEventListener('input', () => {
+      const platform = detectPlatform(els.url.value);
+      els.hint.textContent = platform ? `${platform} link detected` : '';
+    });
+
+    els.form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const url = els.url.value.trim();
+      if (!url) return showError('Please paste a video link first.');
+      if (!detectPlatform(url)) return showError('Only YouTube, Instagram and Facebook links are supported.');
+      els.url.blur();
+      startDownload(url);
+    });
+
+    els.cancel.addEventListener('click', () => {
+      if (!current) return;
+      current.cancelled = true;
+      if (current.jobId) api(`/api/jobs/${current.jobId}`, { method: 'DELETE' }).catch(() => {});
+      current = null;
+      setBusy(false);
+      els.status.innerHTML = '';
+    });
+
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      els.paste.hidden = false;
+      els.paste.addEventListener('click', async () => {
+        try {
+          els.url.value = (await navigator.clipboard.readText()).trim();
+          els.url.dispatchEvent(new Event('input'));
+        } catch {
+          els.url.focus(); // Clipboard access denied; let the user paste manually.
+        }
+      });
+    }
+
+    // Opening the site via a share link like /?url=... fills in the box.
+    const shared = new URLSearchParams(location.search).get('url');
+    if (shared) { els.url.value = shared; els.url.dispatchEvent(new Event('input')); }
+  </script>
+</body>
+</html>
